@@ -31,12 +31,12 @@ SECTION_INDEX_RE = re.compile(r"^\s*(INDICE|ÍNDICE|COROS)\s*\(.*?\)\s*$", re.IG
 HIDDEN_LABEL_RE = re.compile(r"\s+(INDICE|ÍNDICE|COROS)\s*$", re.IGNORECASE)
 PAGE_RANGE_AT_END_RE = re.compile(r"\s+\d{3}\s*[-–—]{3}\s*\d{3}\s*$")
 
-# Broad header candidate: catches both hymn headers like "126 TITLE"
+# Broad header candidate: catches hymn headers like "62 TITLE", "064 TITLE",
 # and chorus headers like "001- TITLE".
-HEADER_CANDIDATE_RE = re.compile(r"^\s*(\d{3})(?:\s*[-–—]\s*|\s+)(.*?)\s*$")
+HEADER_CANDIDATE_RE = re.compile(r"^\s*(\d{1,3})(?:\s*[-–—]\s*|\s+)(.*?)\s*$")
 
 # The real hymn body begins here. Earlier 001 entries are just index entries.
-REAL_FIRST_HYMN_RE = re.compile(r"^\s*001\s+A\s+CASA\s+VETE\s*$", re.IGNORECASE)
+REAL_FIRST_HYMN_RE = re.compile(r"^\s*0*1\s+A\s+CASA\s+VETE\s*$", re.IGNORECASE)
 
 TITLE_FIXES = {
     "CONTAD EN ALTA VOZ": "CANTAD EN ALTA VOZ",
@@ -155,13 +155,12 @@ def main() -> None:
                 i += 1
                 continue
 
-            # If OCR skipped a header pattern, record jumps but do not accept out-of-sequence headers.
             if number > expected_hymn and number <= 517:
                 audit.append(
                     f"Possible missed hymn header before source line {i + 1}: expected H{expected_hymn:03d}, saw {number:03d}"
                 )
 
-        # Chorus body begins after H517. Actual chorus headers are 001- ...
+        # Chorus body begins after H517.
         if not in_hymn_body and match:
             number = int(match.group(1))
             title = title_case_for_display(match.group(2))
