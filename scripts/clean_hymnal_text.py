@@ -31,11 +31,8 @@ SECTION_INDEX_RE = re.compile(r"^\s*(INDICE|ÍNDICE|COROS)\s*\(.*?\)\s*$", re.IG
 HIDDEN_LABEL_RE = re.compile(r"\s+(INDICE|ÍNDICE|COROS)\s*$", re.IGNORECASE)
 PAGE_RANGE_AT_END_RE = re.compile(r"\s+\d{3}\s*[-–—]{3}\s*\d{3}\s*$")
 
-# Broad header candidate: catches hymn headers like "62 TITLE", "064 TITLE",
-# and chorus headers like "001- TITLE".
 HEADER_CANDIDATE_RE = re.compile(r"^\s*(\d{1,3})(?:\s*[-–—]\s*|\s+)(.*?)\s*$")
-
-# The real hymn body begins here. Earlier 001 entries are just index entries.
+STANDALONE_NUMBER_RE = re.compile(r"^\s*(\d{1,3})\s*$")
 REAL_FIRST_HYMN_RE = re.compile(r"^\s*0*1\s+A\s+CASA\s+VETE\s*$", re.IGNORECASE)
 
 TITLE_FIXES = {
@@ -80,16 +77,26 @@ def append_blank(cleaned: list[str]) -> None:
         cleaned.append("")
 
 
-def find_next_nonblank_clean_line(lines: list[str], start_index: int) -> str:
-    """Used when a title is wrapped and the header line has little/no title."""
-    for j in range(start_index + 1, min(start_index + 6, len(lines))):
-        candidate = remove_inline_artifacts(normalize_line(lines[j])).strip()
+def clean_candidate_line(lines: list[str], index: int) -> str:
+    return remove_inline_artifacts(normalize_line(lines[index])).strip()
+
+
+def find_next_nonblank_clean_line(lines: list[str], start_index: int) -> tuple[str, int | None]:
+    """Return the next likely title line and its index."""
+    for j in range(start_index + 1, min(start_index + 8, len(lines))):
+        candidate = clean_candidate_line(lines, j)
         if not candidate:
             continue
         if is_artifact_line(candidate):
             continue
-        return candidate
-    return "SIN TÍTULO"
+        return candidate, j
+    return "SIN TÍTULO", None
+
+
+def add_header(cleaned: list[str], prefix: str, number: int, title: str) -> None:
+    append_blank(cleaned)
+    cleaned.append(f"{prefix}{number:03d} {title_case_for_display(title)}")
+    cleaned.append("")
 
 
 def main() -> None:
@@ -110,12 +117,9 @@ def main() -> None:
 
     i = 0
     while i < len(raw_lines):
-        raw = raw_lines[i]
-        line = normalize_line(raw)
-        line = remove_inline_artifacts(line)
+        line = remove_inline_artifacts(normalize_line(raw_lines[i]))
         stripped = line.strip()
 
-        # Skip everything until the actual hymn body begins.
         if not in_hymn_body and not in_chorus_body:
             if REAL_FIRST_HYMN_RE.match(stripped):
                 cleaned.append("H001 A CASA VETE")
@@ -136,50 +140,75 @@ def main() -> None:
             continue
 
         match = HEADER_CANDIDATE_RE.match(line)
+        standalone = STANDALONE_NUMBER_RE.match(line)
 
-        if in_hymn_body and match:
-            number = int(match.group(1))
-            title = title_case_for_display(match.group(2))
-
-            if number == expected_hymn:
-                if not title:
-                    title = title_case_for_display(find_next_nonblank_clean_line(raw_lines, i))
-                    audit.append(f"H{number:03d}: title was recovered from following line")
-                append_blank(cleaned)
-                cleaned.append(f"H{number:03d} {title}")
-                cleaned.append("")
-                detected_hymns.append(number)
-                expected_hymn += 1
-                if number == 517:
+        if in_hymn_body:
+            if standalone and int(standalone.group(1)) == expected_hymn:
+                title, title_index = find_next_nonblank_clean_line(raw_lines, i)
+                add_header(cleaned, "H", expected_hymn, title)
+                detected_hymns.append(expected_hymn)
+                audit.append(f"H{expected_hymn:03d}: title recovered from following line")
+                if expected_hymn == 517:
                     in_hymn_body = False
-                i += 1
+                expected_hymn += 1
+                i = (title_index + 1) if title_index is not None else i + 1
                 continue
 
-            if number > expected_hymn and number <= 517:
-                audit.append(
-                    f"Possible missed hymn header before source line {i + 1}: expected H{expected_hymn:03d}, saw {number:03d}"
-                )
+            if match:
+                number = int(match.group(1))
+                title = title_case_for_display(match.group(2))
 
-        # Chorus body begins after H517.
-        if not in_hymn_body and match:
-            number = int(match.group(1))
-            title = title_case_for_display(match.group(2))
-            if number == expected_chorus:
+                if number == expected_hymn:
+                    if not title:
+                        title, title_index = find_next_nonblank_clean_line(raw_lines, i)
+                        audit.append(f"H{number:03d}: title recovered from following line")
+                        i = title_index if title_index is not None else i
+                    add_header(cleaned, "H", number, title)
+                    detected_hymns.append(number)
+                    expected_hymn += 1
+                    if number == 517:
+                        in_hymn_body = False
+                    i += 1
+                    continue
+
+                if number > expected_hymn and number <= 517:
+                    audit.append(
+                        f"Possible missed hymn header before source line {i + 1}: expected H{expected_hymn:03d}, saw {number:03d}"
+                    )
+
+        if not in_hymn_body:
+            if standalone and int(standalone.group(1)) == expected_chorus:
+                title, title_index = find_next_nonblank_clean_line(raw_lines, i)
                 if not in_chorus_body:
                     append_blank(cleaned)
                     cleaned.append("# COROS")
                     cleaned.append("")
                     in_chorus_body = True
-                if not title:
-                    title = title_case_for_display(find_next_nonblank_clean_line(raw_lines, i))
-                    audit.append(f"C{number:03d}: title was recovered from following line")
-                append_blank(cleaned)
-                cleaned.append(f"C{number:03d} {title}")
-                cleaned.append("")
-                detected_choruses.append(number)
+                add_header(cleaned, "C", expected_chorus, title)
+                detected_choruses.append(expected_chorus)
+                audit.append(f"C{expected_chorus:03d}: title recovered from following line")
                 expected_chorus += 1
-                i += 1
+                i = (title_index + 1) if title_index is not None else i + 1
                 continue
+
+            if match:
+                number = int(match.group(1))
+                title = title_case_for_display(match.group(2))
+                if number == expected_chorus:
+                    if not in_chorus_body:
+                        append_blank(cleaned)
+                        cleaned.append("# COROS")
+                        cleaned.append("")
+                        in_chorus_body = True
+                    if not title:
+                        title, title_index = find_next_nonblank_clean_line(raw_lines, i)
+                        audit.append(f"C{number:03d}: title recovered from following line")
+                        i = title_index if title_index is not None else i
+                    add_header(cleaned, "C", number, title)
+                    detected_choruses.append(number)
+                    expected_chorus += 1
+                    i += 1
+                    continue
 
         lyric = re.sub(r"^\s+", "", line)
         cleaned.append(lyric)
@@ -192,18 +221,19 @@ def main() -> None:
     missing_hymns = [n for n in range(1, 518) if n not in detected_hymns]
     missing_choruses = [n for n in range(1, 50) if n not in detected_choruses]
 
-    audit_text = []
-    audit_text.append(f"Detected hymns: {len(detected_hymns)}")
-    audit_text.append(f"Detected choruses: {len(detected_choruses)}")
-    audit_text.append("")
-    audit_text.append("Missing hymns:")
-    audit_text.append(", ".join(f"H{n:03d}" for n in missing_hymns) if missing_hymns else "none")
-    audit_text.append("")
-    audit_text.append("Missing choruses:")
-    audit_text.append(", ".join(f"C{n:03d}" for n in missing_choruses) if missing_choruses else "none")
-    audit_text.append("")
-    audit_text.append("Notes:")
-    audit_text.extend(audit or ["none"])
+    audit_text = [
+        f"Detected hymns: {len(detected_hymns)}",
+        f"Detected choruses: {len(detected_choruses)}",
+        "",
+        "Missing hymns:",
+        ", ".join(f"H{n:03d}" for n in missing_hymns) if missing_hymns else "none",
+        "",
+        "Missing choruses:",
+        ", ".join(f"C{n:03d}" for n in missing_choruses) if missing_choruses else "none",
+        "",
+        "Notes:",
+        *(audit or ["none"]),
+    ]
     AUDIT_OUTPUT.write_text("\n".join(audit_text) + "\n", encoding="utf-8")
 
     print(f"Wrote {CLEAN_OUTPUT}")
