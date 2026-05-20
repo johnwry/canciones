@@ -1,0 +1,13 @@
+Songs written: 566
+Hymns written: 517
+Choruses written: 49
+
+Missing hymns:
+none
+
+Missing choruses:
+none
+
+Output directories:
+songs/txt/himnos
+songs/txt/coros

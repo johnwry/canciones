@@ -1,0 +1,11 @@
+Detected hymns: 517
+Detected choruses: 49
+
+Missing hymns:
+none
+
+Missing choruses:
+none
+
+Notes:
+H191: title recovered from following line

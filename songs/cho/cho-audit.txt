@@ -1,0 +1,16 @@
+CHO files written: 566
+Hymns written: 517
+Choruses written: 49
+
+Missing hymns:
+none
+
+Missing choruses:
+none
+
+Errors:
+none
+
+Output directories:
+songs/cho/himnos
+songs/cho/coros
