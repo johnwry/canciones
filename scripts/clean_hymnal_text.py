@@ -32,6 +32,7 @@ HIDDEN_LABEL_RE = re.compile(r"\s+(INDICE|ÍNDICE|COROS)\s*$", re.IGNORECASE)
 PAGE_RANGE_AT_END_RE = re.compile(r"\s+\d{3}\s*[-–—]{3}\s*\d{3}\s*$")
 
 HEADER_CANDIDATE_RE = re.compile(r"^\s*(\d{1,3})(?:\s*[-–—]\s*|\s+)(.*?)\s*$")
+CHORUS_HEADER_RE = re.compile(r"^\s*(\d{1,3})\s*[-–—]\s*(.*?)\s*$")
 STANDALONE_NUMBER_RE = re.compile(r"^\s*(\d{1,3})\s*$")
 REAL_FIRST_HYMN_RE = re.compile(r"^\s*0*1\s+A\s+CASA\s+VETE\s*$", re.IGNORECASE)
 
@@ -82,7 +83,6 @@ def clean_candidate_line(lines: list[str], index: int) -> str:
 
 
 def find_next_nonblank_clean_line(lines: list[str], start_index: int) -> tuple[str, int | None]:
-    """Return the next likely title line and its index."""
     for j in range(start_index + 1, min(start_index + 8, len(lines))):
         candidate = clean_candidate_line(lines, j)
         if not candidate:
@@ -99,6 +99,12 @@ def add_header(cleaned: list[str], prefix: str, number: int, title: str) -> None
     cleaned.append("")
 
 
+def start_chorus_section(cleaned: list[str]) -> None:
+    append_blank(cleaned)
+    cleaned.append("# COROS")
+    cleaned.append("")
+
+
 def main() -> None:
     if not RAW_SOURCE.exists():
         raise SystemExit(f"Missing source file: {RAW_SOURCE}")
@@ -110,6 +116,7 @@ def main() -> None:
 
     in_hymn_body = False
     in_chorus_body = False
+    after_hymns = False
     expected_hymn = 1
     expected_chorus = 1
     detected_hymns: list[int] = []
@@ -120,7 +127,7 @@ def main() -> None:
         line = remove_inline_artifacts(normalize_line(raw_lines[i]))
         stripped = line.strip()
 
-        if not in_hymn_body and not in_chorus_body:
+        if not in_hymn_body and not in_chorus_body and not after_hymns:
             if REAL_FIRST_HYMN_RE.match(stripped):
                 cleaned.append("H001 A CASA VETE")
                 cleaned.append("")
@@ -139,6 +146,7 @@ def main() -> None:
             i += 1
             continue
 
+        chorus_match = CHORUS_HEADER_RE.match(line)
         match = HEADER_CANDIDATE_RE.match(line)
         standalone = STANDALONE_NUMBER_RE.match(line)
 
@@ -150,6 +158,7 @@ def main() -> None:
                 audit.append(f"H{expected_hymn:03d}: title recovered from following line")
                 if expected_hymn == 517:
                     in_hymn_body = False
+                    after_hymns = True
                 expected_hymn += 1
                 i = (title_index + 1) if title_index is not None else i + 1
                 continue
@@ -157,7 +166,6 @@ def main() -> None:
             if match:
                 number = int(match.group(1))
                 title = title_case_for_display(match.group(2))
-
                 if number == expected_hymn:
                     if not title:
                         title, title_index = find_next_nonblank_clean_line(raw_lines, i)
@@ -168,6 +176,7 @@ def main() -> None:
                     expected_hymn += 1
                     if number == 517:
                         in_hymn_body = False
+                        after_hymns = True
                     i += 1
                     continue
 
@@ -176,29 +185,14 @@ def main() -> None:
                         f"Possible missed hymn header before source line {i + 1}: expected H{expected_hymn:03d}, saw {number:03d}"
                     )
 
-        if not in_hymn_body:
-            if standalone and int(standalone.group(1)) == expected_chorus:
-                title, title_index = find_next_nonblank_clean_line(raw_lines, i)
-                if not in_chorus_body:
-                    append_blank(cleaned)
-                    cleaned.append("# COROS")
-                    cleaned.append("")
-                    in_chorus_body = True
-                add_header(cleaned, "C", expected_chorus, title)
-                detected_choruses.append(expected_chorus)
-                audit.append(f"C{expected_chorus:03d}: title recovered from following line")
-                expected_chorus += 1
-                i = (title_index + 1) if title_index is not None else i + 1
-                continue
-
-            if match:
-                number = int(match.group(1))
-                title = title_case_for_display(match.group(2))
+        # Choruses use explicit hyphen headers after hymn 517: 001- title.
+        if after_hymns or in_chorus_body:
+            if chorus_match:
+                number = int(chorus_match.group(1))
+                title = title_case_for_display(chorus_match.group(2))
                 if number == expected_chorus:
                     if not in_chorus_body:
-                        append_blank(cleaned)
-                        cleaned.append("# COROS")
-                        cleaned.append("")
+                        start_chorus_section(cleaned)
                         in_chorus_body = True
                     if not title:
                         title, title_index = find_next_nonblank_clean_line(raw_lines, i)
@@ -209,6 +203,15 @@ def main() -> None:
                     expected_chorus += 1
                     i += 1
                     continue
+
+            if in_chorus_body and standalone and int(standalone.group(1)) == expected_chorus:
+                title, title_index = find_next_nonblank_clean_line(raw_lines, i)
+                add_header(cleaned, "C", expected_chorus, title)
+                detected_choruses.append(expected_chorus)
+                audit.append(f"C{expected_chorus:03d}: title recovered from following line")
+                expected_chorus += 1
+                i = (title_index + 1) if title_index is not None else i + 1
+                continue
 
         lyric = re.sub(r"^\s+", "", line)
         cleaned.append(lyric)
