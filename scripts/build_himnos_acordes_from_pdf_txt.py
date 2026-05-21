@@ -153,6 +153,42 @@ def is_chord_line(line: str) -> bool:
     return True
 
 
+def token_is_chordish(token: str) -> bool:
+    token = token.strip().strip(".,;:()")
+    if not token:
+        return False
+    if token in BAD_SINGLE_CHORD_WORDS:
+        return False
+    return split_chord_stream(token) is not None
+
+
+def split_mixed_chord_lyric_line(line: str) -> tuple[list[str], str]:
+    """Extract isolated chord tokens from a mixed PDF line.
+
+    Examples from the extracted PDF text:
+      "G C D G Voz de amor y de clemencia"
+      "Del trono celestial D G A G A D"
+      "Gozo tenemos por Cristo Jesús, D G"
+
+    This is intentionally aggressive because these files are chord-source files,
+    not the final lyrics. The final lyric line comes from the clean TXT file.
+    """
+    tokens = clean_spaces(line).replace(".", " ").split()
+    chords: list[str] = []
+    lyric_tokens: list[str] = []
+
+    for token in tokens:
+        cleaned = token.strip().strip(".,;:()")
+        if token_is_chordish(cleaned):
+            pieces = split_chord_stream(cleaned) or []
+            chords.extend(pieces)
+        else:
+            lyric_tokens.append(token)
+
+    lyric = clean_spaces(" ".join(lyric_tokens))
+    return chords, lyric
+
+
 def parse_pdf_txt_source(path: Path) -> list[SourceLine]:
     """Parse raw PDF-extracted TXT into chord+lyric source lines."""
     raw = path.read_text(encoding="utf-8", errors="ignore")
@@ -177,8 +213,12 @@ def parse_pdf_txt_source(path: Path) -> list[SourceLine]:
             pending_chords.extend(chord_pieces_from_line(line))
             continue
 
-        source.append(SourceLine(pending_chords, line))
+        inline_chords, source_lyric = split_mixed_chord_lyric_line(line)
+        all_chords = pending_chords + inline_chords
         pending_chords = []
+
+        if source_lyric:
+            source.append(SourceLine(all_chords, source_lyric))
 
     return source
 
