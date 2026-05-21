@@ -1,21 +1,24 @@
 #!/usr/bin/env python3
 """
-Build corrected ChordPro hymn files from the original chorded PDF images.
+Build corrected ChordPro hymn files from the chorded PDF and clean TXT hymns.
 
-TXT files are the layout authority. The PDF is used only to recover chord
-positions. This version prints progress and supports page ranges so you can test
-small batches before OCR'ing the entire PDF.
+This version uses the PDF's embedded/selectable text first. That is much faster
+than OCR and works better for ACORDES HIMNOS.pdf because many pages already
+contain extracted text with chord lines.
+
+Input:
+  songs/txt/himnos = clean lyrics and stanza formatting
+  PDF              = chord source
+
+Output:
+  songs/cho/himnos-acordes
 
 Examples:
+  python3 scripts/build_himnos_acordes_from_pdf.py ~/Downloads/ACORDES\ HIMNOS.pdf --hymns 517
+  python3 scripts/build_himnos_acordes_from_pdf.py ~/Downloads/ACORDES\ HIMNOS.pdf --pages 293
+  python3 scripts/build_himnos_acordes_from_pdf.py ~/Downloads/ACORDES\ HIMNOS.pdf
 
-  python3 scripts/build_himnos_acordes_from_pdf.py ~/Downloads/ACORDES\ HIMNOS.pdf --pages 8-20
-  python3 scripts/build_himnos_acordes_from_pdf.py ~/Downloads/ACORDES\ HIMNOS.pdf --hymns 1-40
-  python3 scripts/build_himnos_acordes_from_pdf.py ~/Downloads/ACORDES\ HIMNOS.pdf --zoom 1.5
-
-Requirements:
-
-  brew install tesseract
-  python3 -m pip install pymupdf
+TXT files remain the layout authority, so stanza/chorus blank lines are preserved.
 """
 
 from __future__ import annotations
@@ -23,13 +26,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 import argparse
-import csv
 import difflib
 import re
 import shutil
-import subprocess
-import sys
-import tempfile
 import unicodedata
 
 try:
@@ -50,33 +49,10 @@ BAD_SINGLE_CHORD_WORDS = {"A", "Y"}
 
 
 @dataclass
-class OcrWord:
-    text: str
-    x: int
-    y: int
-    w: int
-    h: int
-    conf: float
-
-
-@dataclass
-class OcrLine:
-    words: list[OcrWord]
-
-    @property
-    def text(self) -> str:
-        return " ".join(w.text for w in self.words).strip()
-
-    @property
-    def y(self) -> int:
-        return min(w.y for w in self.words) if self.words else 0
-
-
-@dataclass
 class SourceLine:
     hymn_number: int
     page_number: int
-    chords: list[tuple[int, str]]
+    chords: list[str]
     lyric: str
 
 
@@ -113,8 +89,7 @@ def parse_range(spec: str | None, maximum: int | None = None) -> set[int] | None
             continue
         if "-" in part:
             a, b = part.split("-", 1)
-            start, end = int(a), int(b)
-            selected.update(range(start, end + 1))
+            selected.update(range(int(a), int(b) + 1))
         else:
             selected.add(int(part))
     if maximum is not None:
@@ -153,10 +128,12 @@ def is_chord_token(token: str) -> bool:
 
 def split_chord_stream(token: str) -> list[str] | None:
     token = token.strip().strip(".,;:()")
+    # Fix common PDF extraction/OCR artifact: B. E should be B E, handled at line split level.
     if not token:
         return None
     if is_chord_token(token):
         return [token]
+
     pieces: list[str] = []
     i = 0
     while i < len(token):
@@ -168,9 +145,10 @@ def split_chord_stream(token: str) -> list[str] | None:
     return pieces or None
 
 
-def chord_pieces_from_line_text(line: str) -> list[str]:
+def chord_pieces_from_line(line: str) -> list[str]:
     pieces: list[str] = []
-    for token in clean_spaces(line).split():
+    line = clean_spaces(line).replace(".", " ")
+    for token in line.split():
         split = split_chord_stream(token)
         if not split:
             return []
@@ -178,11 +156,13 @@ def chord_pieces_from_line_text(line: str) -> list[str]:
     return pieces
 
 
-def is_chord_line(line: OcrLine) -> bool:
-    text = clean_spaces(line.text)
-    if not text or text.lower().rstrip(":") in SECTION_WORDS:
+def is_chord_line_text(line: str) -> bool:
+    text = clean_spaces(line)
+    if not text:
         return False
-    pieces = chord_pieces_from_line_text(text)
+    if text.lower().rstrip(":") in SECTION_WORDS:
+        return False
+    pieces = chord_pieces_from_line(text)
     if not pieces:
         return False
     if len(pieces) == 1 and pieces[0] in BAD_SINGLE_CHORD_WORDS:
@@ -190,136 +170,72 @@ def is_chord_line(line: OcrLine) -> bool:
     return True
 
 
-def chords_from_ocr_line(line: OcrLine) -> list[tuple[int, str]]:
-    out: list[tuple[int, str]] = []
-    for word in line.words:
-        pieces = split_chord_stream(word.text)
-        if not pieces:
-            continue
-        if len(pieces) == 1:
-            out.append((word.x, pieces[0]))
-        else:
-            step = max(1, word.w // len(pieces))
-            for i, piece in enumerate(pieces):
-                out.append((word.x + i * step, piece))
-    return out
-
-
-def render_page_to_png(doc: fitz.Document, page_index: int, out_path: Path, zoom: float) -> None:
-    page = doc.load_page(page_index)
-    pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), alpha=False)
-    pix.save(out_path)
-
-
-def tesseract_tsv(image_path: Path, lang: str) -> list[OcrWord]:
-    cmd = ["tesseract", str(image_path), "stdout", "--psm", "6", "-l", lang, "tsv"]
-    try:
-        result = subprocess.run(cmd, check=True, text=True, capture_output=True)
-    except FileNotFoundError as exc:
-        raise SystemExit("Missing tesseract. Install with: brew install tesseract") from exc
-    except subprocess.CalledProcessError:
-        cmd = ["tesseract", str(image_path), "stdout", "--psm", "6", "-l", "eng", "tsv"]
-        result = subprocess.run(cmd, check=True, text=True, capture_output=True)
-
-    words: list[OcrWord] = []
-    rows = csv.DictReader(result.stdout.splitlines(), delimiter="\t")
-    for row in rows:
-        text = clean_spaces(row.get("text", ""))
-        if not text:
-            continue
-        try:
-            conf = float(row.get("conf", "-1"))
-        except ValueError:
-            conf = -1
-        if conf < 15:
-            continue
-        words.append(OcrWord(text, int(row.get("left", 0)), int(row.get("top", 0)), int(row.get("width", 0)), int(row.get("height", 0)), conf))
-    return words
-
-
-def group_words_into_lines(words: list[OcrWord]) -> list[OcrLine]:
-    words = sorted(words, key=lambda w: (w.y, w.x))
-    groups: list[list[OcrWord]] = []
-    for word in words:
-        placed = False
-        for group in groups:
-            avg_y = sum(w.y for w in group) / len(group)
-            avg_h = sum(w.h for w in group) / len(group)
-            if abs(word.y - avg_y) <= max(8, avg_h * 0.55):
-                group.append(word)
-                placed = True
-                break
-        if not placed:
-            groups.append([word])
-    return sorted([OcrLine(sorted(g, key=lambda w: w.x)) for g in groups], key=lambda l: l.y)
-
-
-def detect_hymn_heading(lines: list[OcrLine]) -> int | None:
-    for line in lines[:10]:
-        m = HEADING_RE.match(clean_spaces(line.text))
-        if m:
-            return int(m.group(1))
-    return None
-
-
-def pair_chords_to_lyrics(hymn_number: int, page_number: int, lines: list[OcrLine]) -> list[SourceLine]:
-    source_lines: list[SourceLine] = []
-    pending_chords: list[tuple[int, str]] = []
-    for line in lines:
-        text = clean_spaces(line.text)
-        if not text or text.upper() == "INDICE" or HEADING_RE.match(text):
-            continue
-        if text.lower().rstrip(":") in SECTION_WORDS:
-            continue
-        if is_chord_line(line):
-            pending_chords.extend(chords_from_ocr_line(line))
-            continue
-        source_lines.append(SourceLine(hymn_number, page_number, pending_chords, text))
-        pending_chords = []
-    return source_lines
-
-
-def extract_pdf_sources(pdf_path: Path, page_numbers: set[int] | None, hymn_filter: set[int] | None, zoom: float, lang: str) -> dict[int, list[SourceLine]]:
+def extract_sources_from_pdf_text(pdf_path: Path, page_filter: set[int] | None, hymn_filter: set[int] | None) -> dict[int, list[SourceLine]]:
     doc = fitz.open(pdf_path)
-    sources: dict[int, list[SourceLine]] = {}
     total_pages = len(doc)
-    pages = sorted(page_numbers or set(range(1, total_pages + 1)))
+    pages = sorted(page_filter or set(range(1, total_pages + 1)))
+    sources: dict[int, list[SourceLine]] = {}
 
-    with tempfile.TemporaryDirectory() as tmp:
-        tmp_dir = Path(tmp)
-        for count, page_number in enumerate(pages, 1):
-            page_index = page_number - 1
-            print(f"OCR page {page_number}/{total_pages} ({count}/{len(pages)})...", flush=True)
-            image_path = tmp_dir / f"page-{page_number:03d}.png"
-            render_page_to_png(doc, page_index, image_path, zoom)
-            words = tesseract_tsv(image_path, lang)
-            lines = group_words_into_lines(words)
-            hymn_number = detect_hymn_heading(lines)
-            if hymn_number is None:
+    current_hymn: int | None = None
+    pending_chords: list[str] = []
+
+    for count, page_number in enumerate(pages, 1):
+        print(f"Reading PDF text page {page_number}/{total_pages} ({count}/{len(pages)})...", flush=True)
+        page_text = doc[page_number - 1].get_text("text") or ""
+        for raw in page_text.splitlines():
+            line = clean_spaces(raw)
+            if not line:
                 continue
-            if hymn_filter is not None and hymn_number not in hymn_filter:
+            if line.upper() == "INDICE":
                 continue
-            source_lines = pair_chords_to_lyrics(hymn_number, page_number, lines)
-            if source_lines:
-                print(f"  found hymn {hymn_number}: {len(source_lines)} lyric lines", flush=True)
-                sources.setdefault(hymn_number, []).extend(source_lines)
+
+            heading = HEADING_RE.match(line)
+            if heading:
+                current_hymn = int(heading.group(1))
+                pending_chords = []
+                continue
+
+            if current_hymn is None:
+                continue
+            if hymn_filter is not None and current_hymn not in hymn_filter:
+                continue
+
+            if line.lower().rstrip(":") in SECTION_WORDS:
+                pending_chords = []
+                continue
+
+            if is_chord_line_text(line):
+                pending_chords.extend(chord_pieces_from_line(line))
+                continue
+
+            # Lyric line: attach the chord lines immediately above it.
+            sources.setdefault(current_hymn, []).append(
+                SourceLine(current_hymn, page_number, pending_chords, line)
+            )
+            pending_chords = []
+
+    print(f"PDF text source hymns found: {len(sources)}", flush=True)
     return sources
 
 
-def insert_chords_by_x(chords: list[tuple[int, str]], lyric: str) -> str:
+def attach_chords(chords: list[str], lyric: str) -> str:
     lyric = lyric.strip()
     if not chords:
         return lyric
     words = lyric.split()
     if len(words) <= 1:
-        return "".join(f"[{ch}]" for _x, ch in chords) + lyric
-    chords = sorted(chords, key=lambda item: item[0])
-    min_x = min(x for x, _ in chords)
-    max_x = max(x for x, _ in chords)
+        return "".join(f"[{ch}]" for ch in chords) + lyric
+
+    # PDF text extraction usually loses exact horizontal spacing. This distributes
+    # recovered chord groups across the lyric line while preserving all chords.
     slots: dict[int, list[str]] = {}
-    for x, ch in chords:
-        idx = 0 if max_x == min_x else round(((x - min_x) / (max_x - min_x)) * (len(words) - 1))
-        slots.setdefault(idx, []).append(ch)
+    if len(chords) == 1:
+        slots[0] = chords
+    else:
+        for i, chord in enumerate(chords):
+            idx = round(i * (len(words) - 1) / (len(chords) - 1))
+            slots.setdefault(idx, []).append(chord)
+
     return " ".join("".join(f"[{ch}]" for ch in slots.get(i, [])) + word for i, word in enumerate(words))
 
 
@@ -349,6 +265,7 @@ def build_one_hymn(txt_path: Path, source_lines: list[SourceLine]) -> tuple[str,
     used: set[int] = set()
     hint = 0
     matched = chorded = unchorded = 0
+
     for line in txt_lines:
         if line == "":
             if out and out[-1] != "":
@@ -357,6 +274,7 @@ def build_one_hymn(txt_path: Path, source_lines: list[SourceLine]) -> tuple[str,
         if line.lower().rstrip(":") in SECTION_WORDS:
             out.append(f"{{comment: {line.rstrip(':').capitalize()}}}")
             continue
+
         idx, score = best_source_for_txt_line(line, source_lines, used, hint)
         if idx is not None and score >= 0.64:
             src = source_lines[idx]
@@ -365,23 +283,21 @@ def build_one_hymn(txt_path: Path, source_lines: list[SourceLine]) -> tuple[str,
             matched += 1
             if src.chords:
                 chorded += 1
-                out.append(insert_chords_by_x(src.chords, line))
             else:
                 unchorded += 1
-                out.append(line)
+            out.append(attach_chords(src.chords, line))
         else:
             unchorded += 1
             out.append(line)
+
     return "\n".join(out).rstrip() + "\n", {"matched": matched, "chorded": chorded, "unchorded": unchorded}
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Build ChordPro hymns from clean TXT files and chorded PDF OCR.")
+    parser = argparse.ArgumentParser(description="Build ChordPro hymns from clean TXT files and chorded PDF text.")
     parser.add_argument("pdf", help="Path to ACORDES HIMNOS.pdf")
-    parser.add_argument("--pages", help="Page range to OCR, e.g. 8-20 or 8,9,10")
-    parser.add_argument("--hymns", help="Only build selected hymn numbers, e.g. 1-40 or 517")
-    parser.add_argument("--zoom", type=float, default=1.5, help="PDF render zoom. Default: 1.5. Use 2.0 if OCR is poor.")
-    parser.add_argument("--lang", default="spa+eng", help="Tesseract language. Default: spa+eng; fallback to eng if unavailable.")
+    parser.add_argument("--pages", help="Page range to read, e.g. 293 or 8-20")
+    parser.add_argument("--hymns", help="Only build selected hymn numbers, e.g. 517 or 1-40")
     args = parser.parse_args()
 
     pdf_path = Path(args.pdf).expanduser().resolve()
@@ -398,9 +314,7 @@ def main() -> None:
         shutil.rmtree(OUT_DIR)
     OUT_DIR.mkdir(parents=True)
 
-    print("Starting OCR extraction...", flush=True)
-    sources = extract_pdf_sources(pdf_path, page_filter, hymn_filter, args.zoom, args.lang)
-    print(f"OCR source hymns found: {len(sources)}", flush=True)
+    sources = extract_sources_from_pdf_text(pdf_path, page_filter, hymn_filter)
 
     txt_files = sorted(TXT_DIR.glob("*.txt"))
     created = skipped = total_matched = total_chorded = total_unchorded = 0
