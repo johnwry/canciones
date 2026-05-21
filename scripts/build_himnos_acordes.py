@@ -2,8 +2,8 @@
 """
 Build corrected ChordPro hymn files by combining:
 
-  songs/txt/himnos        = clean lyric text
-  songs/cho/himnos        = chord source files, even if chords are broken onto their own lines
+  songs/txt/himnos = clean hymn lyrics and stanza formatting
+  songs/cho/himnos = chord source files
 
 Output:
 
@@ -13,7 +13,11 @@ Run from the repository root:
 
   python3 scripts/build_himnos_acordes.py
 
-This script is intentionally conservative. It never changes the original .txt or .cho files.
+Important behavior:
+- The TXT file is the layout authority.
+- Blank lines/stanzas from TXT are preserved.
+- Existing CHO files are used only as chord sources.
+- Originals are never modified.
 """
 
 from __future__ import annotations
@@ -29,20 +33,25 @@ TXT_DIR = ROOT / "songs" / "txt" / "himnos"
 CHO_DIR = ROOT / "songs" / "cho" / "himnos"
 OUT_DIR = ROOT / "songs" / "cho" / "himnos-acordes"
 
-CHORD_RE = re.compile(
-    r"^[A-G](?:#|b)?(?:m|maj|min|dim|aug|sus|add|\+)?\d*(?:/[A-G](?:#|b)?)?$"
-)
-INLINE_CHORD_RE = re.compile(r"\[([^\]]+)\]")
 TITLE_RE = re.compile(r"^\{title:\s*(.*?)\s*\}$", re.IGNORECASE)
 COMMENT_RE = re.compile(r"^\{comment:\s*(.*?)\s*\}$", re.IGNORECASE)
+INLINE_CHORD_RE = re.compile(r"\[([^\]]+)\]")
+CHORD_TOKEN_RE = re.compile(
+    r"^[A-G](?:#|b)?(?:m|maj|min|dim|aug|sus|add|\+)?\d*(?:/[A-G](?:#|b)?)?$"
+)
+CHORD_SCAN_RE = re.compile(
+    r"[A-G](?:#|b)?(?:m|maj|min|dim|aug|sus|add|\+)?\d*(?:/[A-G](?:#|b)?)?"
+)
+
+SECTION_WORDS = {"coro", "chorus", "estrofa", "verse"}
 
 
 def clean_spaces(s: str) -> str:
     return (
         s.replace("\u00a0", " ")
         .replace("\ufeff", "")
-        .replace("￾", "")
         .replace("\u200b", "")
+        .replace("￾", "")
         .rstrip()
     )
 
@@ -63,33 +72,44 @@ def normalize_for_match(s: str) -> str:
     return re.sub(r"\s+", " ", s).strip()
 
 
-def is_chord_token(tok: str) -> bool:
-    tok = tok.strip().strip(".")
-    return bool(CHORD_RE.fullmatch(tok))
+def comment_payload(line: str) -> str | None:
+    m = COMMENT_RE.match(line.strip())
+    if not m:
+        return None
+    return clean_spaces(m.group(1)).strip()
 
 
-def split_chord_stream(tok: str) -> list[str] | None:
-    """Split glued chord strings like C#7F#m or F#mG#m if possible."""
-    tok = tok.strip().strip(".")
-    if is_chord_token(tok):
-        return [tok]
+def is_chord_token(token: str) -> bool:
+    return bool(CHORD_TOKEN_RE.fullmatch(token.strip().strip(".")))
 
-    out: list[str] = []
+
+def split_chord_stream(token: str) -> list[str] | None:
+    """Split glued chord strings like C#7F#m or F#mG#m."""
+    token = token.strip().strip(".")
+    if not token:
+        return None
+    if is_chord_token(token):
+        return [token]
+
+    pieces: list[str] = []
     i = 0
-    # Greedy chord scanner.
-    pattern = re.compile(r"[A-G](?:#|b)?(?:m|maj|min|dim|aug|sus|add|\+)?\d*(?:/[A-G](?:#|b)?)?")
-    while i < len(tok):
-        m = pattern.match(tok, i)
+    while i < len(token):
+        m = CHORD_SCAN_RE.match(token, i)
         if not m:
             return None
-        out.append(m.group(0))
+        pieces.append(m.group(0))
         i = m.end()
-    return out or None
+    return pieces or None
 
 
-def chord_tokens_from_plain_line(line: str) -> list[str]:
+def chord_tokens_from_text(text: str) -> list[str]:
+    text = clean_spaces(text).strip()
+    payload = comment_payload(text)
+    if payload is not None:
+        text = payload
+
     tokens: list[str] = []
-    for raw in clean_spaces(line).split():
+    for raw in text.split():
         pieces = split_chord_stream(raw)
         if not pieces:
             return []
@@ -97,25 +117,38 @@ def chord_tokens_from_plain_line(line: str) -> list[str]:
     return tokens
 
 
-def is_plain_chord_line(line: str) -> bool:
-    s = clean_spaces(line).strip()
-    if not s:
+def is_chord_only_line(line: str) -> bool:
+    line = clean_spaces(line).strip()
+    if not line:
         return False
-    if s.lower().rstrip(":") in {"coro", "chorus", "estrofa", "verse"}:
+
+    payload = comment_payload(line)
+    test = payload if payload is not None else line
+    if test.lower().rstrip(":") in SECTION_WORDS:
         return False
-    return bool(chord_tokens_from_plain_line(s))
+
+    if INLINE_CHORD_RE.fullmatch(test):
+        return True
+
+    return bool(chord_tokens_from_text(test))
 
 
-def line_chords(line: str) -> list[str]:
-    """Return chords from either [A] inline form or plain chord-only form."""
+def chords_from_line(line: str) -> list[str]:
+    line = clean_spaces(line).strip()
+    payload = comment_payload(line)
+    if payload is not None:
+        return chord_tokens_from_text(payload)
+
     inline = INLINE_CHORD_RE.findall(line)
     if inline:
         return [c.strip() for c in inline if c.strip()]
-    return chord_tokens_from_plain_line(line)
+
+    return chord_tokens_from_text(line)
 
 
-def line_lyrics(line: str) -> str:
-    line = INLINE_CHORD_RE.sub("", clean_spaces(line))
+def lyric_from_cho_line(line: str) -> str:
+    line = clean_spaces(line).strip()
+    line = INLINE_CHORD_RE.sub("", line)
     return line.strip()
 
 
@@ -127,26 +160,44 @@ def title_from_cho(text: str, fallback: str) -> str:
     return fallback
 
 
-def read_clean_lyrics(txt_path: Path) -> list[str]:
+def title_from_txt(txt_path: Path) -> str:
+    stem = txt_path.stem
+    stem = re.sub(r"^\d+\s*[-.]\s*", "", stem).strip()
+    return stem.upper() if stem else txt_path.stem
+
+
+def read_txt_layout(txt_path: Path) -> list[str]:
+    """Read TXT exactly as layout base, preserving blank lines."""
     raw = txt_path.read_text(encoding="utf-8", errors="ignore")
     lines: list[str] = []
-    for line in raw.splitlines():
-        line = clean_spaces(line).strip()
-        if not line:
-            continue
+    for raw_line in raw.splitlines():
+        line = clean_spaces(raw_line).strip()
         if TITLE_RE.match(line):
             continue
         if line.upper() == "INDICE":
             continue
+        # Preserve blanks because they mark stanzas/slides.
         lines.append(line)
+
+    # Trim leading/trailing blank lines only.
+    while lines and lines[0] == "":
+        lines.pop(0)
+    while lines and lines[-1] == "":
+        lines.pop()
     return lines
 
 
 def parse_chord_source(cho_path: Path) -> tuple[str, list[tuple[list[str], str]]]:
-    """Return title and ordered pairs: ([chords], lyric_or_label)."""
+    """Parse source into ordered (chords, lyric) pairs.
+
+    Handles all these cases:
+    - plain chord line above lyric: A D E / Gracias...
+    - comment chord line above lyric: {comment: A D E} / Gracias...
+    - orphan bracket chord lines: [A] / [E] / lyric
+    - already inline chord line: [A]Gracias...
+    """
     text = cho_path.read_text(encoding="utf-8", errors="ignore")
     title = title_from_cho(text, cho_path.stem)
-
     pairs: list[tuple[list[str], str]] = []
     pending_chords: list[str] = []
 
@@ -156,32 +207,39 @@ def parse_chord_source(cho_path: Path) -> tuple[str, list[tuple[list[str], str]]
             continue
         if TITLE_RE.match(line):
             continue
-        if line.lower().startswith("{comment: himno") or line.lower().startswith("{comment: fuente"):
-            continue
         if line.upper() == "INDICE":
             continue
-
-        # Preserve section labels without attaching chords.
-        if line.lower().rstrip(":") in {"coro", "chorus"} or line == "{comment: Coro}":
-            if pending_chords:
-                pairs.append((pending_chords, ""))
-                pending_chords = []
-            pairs.append(([], "{comment: Coro}"))
+        if line.lower().startswith("{comment: himno") or line.lower().startswith("{comment: fuente"):
             continue
 
-        if is_plain_chord_line(line) or (INLINE_CHORD_RE.fullmatch(line) is not None):
-            pending_chords.extend(line_chords(line))
+        payload = comment_payload(line)
+        if payload is not None:
+            if payload.lower().rstrip(":") in SECTION_WORDS:
+                pairs.append(([], payload))
+                continue
+            if is_chord_only_line(line):
+                pending_chords.extend(chords_from_line(line))
+                continue
+            # Non-chord comments are labels; preserve them as lyrics/comments for matching only if useful.
+            pairs.append(([], payload))
             continue
 
-        chords = pending_chords + line_chords(line)
-        lyric = line_lyrics(line)
+        if line.lower().rstrip(":") in SECTION_WORDS:
+            pairs.append(([], line))
+            continue
+
+        if is_chord_only_line(line):
+            pending_chords.extend(chords_from_line(line))
+            continue
+
+        inline_chords = chords_from_line(line)
+        lyric = lyric_from_cho_line(line)
+        chords = pending_chords + inline_chords
         pending_chords = []
         if lyric:
             pairs.append((chords, lyric))
 
-    if pending_chords:
-        pairs.append((pending_chords, ""))
-
+    # Do not emit final orphan chords; without a lyric they cannot be placed safely.
     return title, pairs
 
 
@@ -192,96 +250,113 @@ def attach_chords(chords: list[str], lyric: str) -> str:
     if not lyric:
         return "".join(f"[{c}]" for c in chords)
 
-    # Conservative placement: first chord at start; remaining chords distributed over word starts.
     words = lyric.split()
-    if len(chords) == 1 or len(words) <= 1:
+    if len(words) <= 1:
         return "".join(f"[{c}]" for c in chords) + lyric
 
-    # Place chords at roughly even word positions.
-    positions = []
-    for idx, _ch in enumerate(chords):
-        pos = round(idx * (len(words) - 1) / max(1, len(chords) - 1))
-        positions.append(pos)
+    # With no original column data, distribute chords over word starts.
+    # This is not musically perfect, but it keeps every chord inline and usable.
+    slots: dict[int, list[str]] = {}
+    if len(chords) == 1:
+        slots[0] = chords
+    else:
+        for i, chord in enumerate(chords):
+            word_index = round(i * (len(words) - 1) / (len(chords) - 1))
+            slots.setdefault(word_index, []).append(chord)
 
-    by_pos: dict[int, list[str]] = {}
-    for pos, chord in zip(positions, chords):
-        by_pos.setdefault(pos, []).append(chord)
-
-    out_words: list[str] = []
+    output_words: list[str] = []
     for i, word in enumerate(words):
-        prefix = "".join(f"[{c}]" for c in by_pos.get(i, []))
-        out_words.append(prefix + word)
-    return " ".join(out_words)
+        prefix = "".join(f"[{c}]" for c in slots.get(i, []))
+        output_words.append(prefix + word)
+    return " ".join(output_words)
 
 
-def find_best_clean_line(source_lyric: str, clean_lines: list[str], used: set[int], start_hint: int) -> tuple[int | None, float]:
-    source_norm = normalize_for_match(source_lyric)
-    if not source_norm:
+def best_chord_pair_for_line(
+    clean_line: str,
+    chord_pairs: list[tuple[list[str], str]],
+    used_pairs: set[int],
+    start_hint: int,
+) -> tuple[int | None, float]:
+    target = normalize_for_match(clean_line)
+    if not target:
         return None, 0.0
 
-    best_i = None
+    best_i: int | None = None
     best_score = 0.0
-    # Prefer nearby unused lines, but allow broader search.
-    candidates = list(range(start_hint, min(len(clean_lines), start_hint + 8)))
-    candidates += [i for i in range(len(clean_lines)) if i not in candidates]
+
+    # Prefer nearby chord-source lines first. This keeps repeated chorus/stanza lines sane.
+    candidates = list(range(start_hint, min(len(chord_pairs), start_hint + 12)))
+    candidates += [i for i in range(len(chord_pairs)) if i not in candidates]
 
     for i in candidates:
-        if i in used:
+        if i in used_pairs:
             continue
-        score = difflib.SequenceMatcher(None, source_norm, normalize_for_match(clean_lines[i])).ratio()
+        _chords, source_lyric = chord_pairs[i]
+        source = normalize_for_match(source_lyric)
+        if not source:
+            continue
+        score = difflib.SequenceMatcher(None, target, source).ratio()
         if score > best_score:
             best_i = i
             best_score = score
         if score >= 0.98:
             break
+
     return best_i, best_score
 
 
 def merge_one(txt_path: Path, cho_path: Path, out_path: Path) -> dict[str, int]:
-    clean_lines = read_clean_lyrics(txt_path)
-    title, pairs = parse_chord_source(cho_path)
+    txt_lines = read_txt_layout(txt_path)
+    cho_title, chord_pairs = parse_chord_source(cho_path)
+    title = cho_title or title_from_txt(txt_path)
 
-    used: set[int] = set()
-    next_hint = 0
-    output_lines: list[str] = [f"{{title: {title}}}", ""]
+    used_pairs: set[int] = set()
+    pair_hint = 0
+    output: list[str] = [f"{{title: {title}}}", ""]
     matched = 0
-    unmatched = 0
+    chorded = 0
+    unchorded = 0
 
-    for chords, source_lyric in pairs:
-        if source_lyric == "{comment: Coro}":
-            output_lines.append("{comment: Coro}")
+    for line in txt_lines:
+        # Preserve stanza/slide breaks from the TXT source.
+        if line == "":
+            if output and output[-1] != "":
+                output.append("")
             continue
 
-        idx, score = find_best_clean_line(source_lyric, clean_lines, used, next_hint)
-        if idx is not None and score >= 0.72:
-            lyric = clean_lines[idx]
-            used.add(idx)
-            next_hint = idx + 1
+        # Preserve section labels from TXT.
+        if line.lower().rstrip(":") in SECTION_WORDS:
+            output.append(f"{{comment: {line.rstrip(':').capitalize()}}}")
+            continue
+
+        idx, score = best_chord_pair_for_line(line, chord_pairs, used_pairs, pair_hint)
+        if idx is not None and score >= 0.68:
+            chords, _source_lyric = chord_pairs[idx]
+            used_pairs.add(idx)
+            pair_hint = idx + 1
             matched += 1
+            if chords:
+                chorded += 1
+            else:
+                unchorded += 1
+            output.append(attach_chords(chords, line))
         else:
-            lyric = source_lyric
-            unmatched += 1
-
-        output_lines.append(attach_chords(chords, lyric))
-
-    # Add any clean lyric lines that never matched, so the hymn remains complete.
-    remaining = [clean_lines[i] for i in range(len(clean_lines)) if i not in used]
-    if remaining:
-        output_lines.append("")
-        output_lines.append("{comment: Líneas limpias sin acordes detectados}")
-        output_lines.extend(remaining)
+            unchorded += 1
+            output.append(line)
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text("\n".join(output_lines).strip() + "\n", encoding="utf-8")
-    return {"matched": matched, "unmatched": unmatched, "remaining": len(remaining)}
+    text = "\n".join(output).rstrip() + "\n"
+    out_path.write_text(text, encoding="utf-8")
+    return {"matched": matched, "chorded": chorded, "unchorded": unchorded}
 
 
 def choose_matching_txt(cho_path: Path, txt_files: list[Path]) -> Path | None:
-    # Prefer same stem.
-    same = [p for p in txt_files if p.stem == cho_path.stem]
-    if same:
-        return same[0]
+    # Same stem first.
+    for p in txt_files:
+        if p.stem == cho_path.stem:
+            return p
 
+    # Hymn number match.
     cho_num = re.match(r"^(\d+)", cho_path.stem)
     if cho_num:
         n = cho_num.group(1).lstrip("0")
@@ -290,12 +365,12 @@ def choose_matching_txt(cho_path: Path, txt_files: list[Path]) -> Path | None:
             if m and m.group(1).lstrip("0") == n:
                 return p
 
-    # Fuzzy title match fallback.
-    cho_title = normalize_for_match(cho_path.stem)
-    best = None
+    # Fuzzy filename fallback.
+    cho_name = normalize_for_match(cho_path.stem)
+    best: Path | None = None
     best_score = 0.0
     for p in txt_files:
-        score = difflib.SequenceMatcher(None, cho_title, normalize_for_match(p.stem)).ratio()
+        score = difflib.SequenceMatcher(None, cho_name, normalize_for_match(p.stem)).ratio()
         if score > best_score:
             best = p
             best_score = score
@@ -318,26 +393,27 @@ def main() -> None:
     created = 0
     skipped = 0
     total_matched = 0
-    total_unmatched = 0
-    total_remaining = 0
+    total_chorded = 0
+    total_unchorded = 0
 
     for cho_path in cho_files:
         txt_path = choose_matching_txt(cho_path, txt_files)
         if not txt_path:
             skipped += 1
             continue
+
         out_path = OUT_DIR / cho_path.name
         stats = merge_one(txt_path, cho_path, out_path)
         created += 1
         total_matched += stats["matched"]
-        total_unmatched += stats["unmatched"]
-        total_remaining += stats["remaining"]
+        total_chorded += stats["chorded"]
+        total_unchorded += stats["unchorded"]
 
     print(f"Created: {created} files in {OUT_DIR.relative_to(ROOT)}")
     print(f"Skipped chord files without matching txt: {skipped}")
-    print(f"Matched chord/lyric lines: {total_matched}")
-    print(f"Unmatched chord-source lines kept: {total_unmatched}")
-    print(f"Clean lyric lines added without chords: {total_remaining}")
+    print(f"Matched lyric lines: {total_matched}")
+    print(f"Lines with inserted chords: {total_chorded}")
+    print(f"Lines without chords: {total_unchorded}")
 
 
 if __name__ == "__main__":
