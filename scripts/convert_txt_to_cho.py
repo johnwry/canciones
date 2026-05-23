@@ -2,12 +2,15 @@
 """
 Convert song TXT files into ChordPro .cho files.
 
-This version does not depend on the current working directory.
-It scans the repository for text files inside folders named:
-  nuevos
-  niños / ninos
+Source folders:
+  songs/txt/nuevos
+  songs/txt/niños
 
-Usage from anywhere inside the repo:
+Output folders:
+  songs/cho/coros
+  songs/cho/niños
+
+Usage:
   python3 scripts/convert_txt_to_cho.py
 """
 
@@ -19,8 +22,8 @@ from pathlib import Path
 
 SCRIPT_PATH = Path(__file__).resolve()
 REPO_ROOT = SCRIPT_PATH.parents[1]
-TARGET_FOLDER_NAMES = {"nuevos", "niños", "ninos"}
-TEXT_EXTENSIONS = {".txt", ".text", ".TXT"}
+SOURCE_ROOT = REPO_ROOT / "songs" / "txt"
+OUTPUT_ROOT = REPO_ROOT / "songs" / "cho"
 
 CHORD_RE = re.compile(
     r"^(?:\s*(?:[A-G](?:#|b)?(?:maj|min|m|sus|dim|aug|add)?\d*(?:/[A-G](?:#|b)?)?|N\.C\.|\||:|/)+\s*)+$",
@@ -32,48 +35,61 @@ AUTHOR_RE = re.compile(r"^\s*Autor\s*:\s*(.+?)\s*$", re.IGNORECASE)
 LEADING_NUMBER_RE = re.compile(r"^\s*(\d+)\s*[.\-)]\s*(.+?)\s*$")
 
 
+SOURCE_TO_OUTPUT = {
+    "nuevos": "coros",
+    "niños": "niños",
+    "ninos": "niños",
+}
+
+
 def strip_accents(text: str) -> str:
     text = unicodedata.normalize("NFKD", text)
     return "".join(ch for ch in text if not unicodedata.combining(ch))
 
 
-def normalized_part(text: str) -> str:
-    return strip_accents(text).lower()
-
-
-def strip_accents_for_filename(text: str) -> str:
+def slugify(text: str) -> str:
     text = strip_accents(text).lower()
     text = re.sub(r"[^a-z0-9]+", "-", text)
     return text.strip("-") or "cancion"
 
 
-def clean_title(raw_title: str, fallback_stem: str) -> str:
-    title = raw_title.strip() or fallback_stem.strip()
+def clean_title(raw_title: str, fallback: str) -> str:
+    title = raw_title.strip() or fallback.strip()
     return re.sub(r"\s+", " ", title)
 
 
 def filename_from_title(title: str, fallback_number: str | None = None) -> str:
     match = LEADING_NUMBER_RE.match(title)
+
     if match:
         number, rest = match.groups()
-        return f"{int(number):02d}-{strip_accents_for_filename(rest)}.cho"
+        return f"{int(number):02d}-{slugify(rest)}.cho"
+
     if fallback_number:
-        return f"{int(fallback_number):02d}-{strip_accents_for_filename(title)}.cho"
-    return f"{strip_accents_for_filename(title)}.cho"
+        return f"{int(fallback_number):02d}-{slugify(title)}.cho"
+
+    return f"{slugify(title)}.cho"
 
 
 def is_chord_line(line: str) -> bool:
     stripped = line.strip()
+
     if not stripped:
         return False
+
     stripped = stripped.replace("//", " ").strip()
     return bool(stripped and CHORD_RE.match(stripped))
 
 
+CHORD_PATTERN = re.compile(
+    r"[A-G](?:#|b)?(?:maj|min|m|sus|dim|aug|add)?\d*(?:/[A-G](?:#|b)?)?|N\.C\.",
+    re.IGNORECASE,
+)
+
+
 def split_chords(chord_line: str) -> list[tuple[int, str]]:
     clean = chord_line.replace("//", " ").rstrip("\n")
-    chord_pattern = r"[A-G](?:#|b)?(?:maj|min|m|sus|dim|aug|add)?\d*(?:/[A-G](?:#|b)?)?|N\.C\."
-    return [(m.start(), m.group(0)) for m in re.finditer(chord_pattern, clean, re.IGNORECASE)]
+    return [(m.start(), m.group(0)) for m in CHORD_PATTERN.finditer(clean)]
 
 
 def merge_chords_with_lyrics(chord_line: str, lyric_line: str) -> str:
@@ -81,11 +97,13 @@ def merge_chords_with_lyrics(chord_line: str, lyric_line: str) -> str:
     lyric = lyric_line.rstrip("\n")
 
     inserts: dict[int, list[str]] = {}
+
     for pos, chord in chords:
         idx = min(pos, len(lyric))
         inserts.setdefault(idx, []).append(chord)
 
     out: list[str] = []
+
     for i, ch in enumerate(lyric):
         if i in inserts:
             out.extend(f"[{chord}]" for chord in inserts[i])
@@ -102,12 +120,14 @@ def read_text_file(path: Path) -> str:
         try:
             return path.read_text(encoding=encoding)
         except UnicodeDecodeError:
-            continue
+            pass
+
     return path.read_text(errors="replace")
 
 
 def convert_text(content: str, fallback_stem: str) -> tuple[str, str]:
     lines = content.replace("\ufeff", "").splitlines()
+
     title = ""
     author = ""
     body: list[str] = []
@@ -130,11 +150,14 @@ def convert_text(content: str, fallback_stem: str) -> tuple[str, str]:
         title = clean_title(fallback_stem, fallback_stem)
 
     output: list[str] = [f"{{title: {title}}}"]
+
     if author:
         output.append(f"{{artist: {author}}}")
+
     output.append("")
 
     i = 0
+
     while i < len(body):
         line = body[i]
 
@@ -149,58 +172,52 @@ def convert_text(content: str, fallback_stem: str) -> tuple[str, str]:
     return title, "\n".join(output).rstrip() + "\n"
 
 
-def target_group_for_path(path: Path) -> str | None:
-    for part in path.parts:
-        normalized = normalized_part(part)
-        if normalized in TARGET_FOLDER_NAMES:
-            return "niños" if normalized == "ninos" else part
-    return None
+def discover_source_files() -> list[tuple[str, Path]]:
+    found: list[tuple[str, Path]] = []
 
+    for source_name in SOURCE_TO_OUTPUT:
+        source_folder = SOURCE_ROOT / source_name
 
-def discover_source_files() -> list[Path]:
-    files: list[Path] = []
-
-    for path in REPO_ROOT.rglob("*"):
-        if not path.is_file():
+        if not source_folder.exists():
             continue
-        if ".git" in path.parts:
-            continue
-        if "cho" in [normalized_part(part) for part in path.parts]:
-            continue
-        if path.suffix not in TEXT_EXTENSIONS:
-            continue
-        if target_group_for_path(path.relative_to(REPO_ROOT)) is None:
-            continue
-        files.append(path)
 
-    return sorted(files)
+        for path in sorted(source_folder.rglob("*.txt")):
+            found.append((source_name, path))
+
+    return found
 
 
-def output_path_for_source(source_path: Path, title: str) -> Path:
-    rel = source_path.relative_to(REPO_ROOT)
-    group = target_group_for_path(rel) or "nuevos"
+def output_path_for(source_name: str, source_path: Path, title: str) -> Path:
+    output_group = SOURCE_TO_OUTPUT[source_name]
+
     number_match = re.match(r"^\s*(\d+)", source_path.stem)
-    output_name = filename_from_title(title, number_match.group(1) if number_match else None)
-    return REPO_ROOT / "cho" / group / output_name
+
+    filename = filename_from_title(
+        title,
+        number_match.group(1) if number_match else None,
+    )
+
+    return OUTPUT_ROOT / output_group / filename
 
 
 def main() -> None:
     source_files = discover_source_files()
 
     if not source_files:
-        print("No source .txt files found inside folders named nuevos or niños/ninos.")
-        print(f"Repo root detected as: {REPO_ROOT}")
-        print("Tip: run this to inspect your actual paths:")
-        print("  find . -maxdepth 5 -type f | sort")
+        print("No .txt songs found.")
+        print(f"Expected source root: {SOURCE_ROOT}")
         return
 
     total = 0
 
-    for source_path in source_files:
-        title, cho_text = convert_text(read_text_file(source_path), source_path.stem)
-        output_path = output_path_for_source(source_path, title)
+    for source_name, source_path in source_files:
+        content = read_text_file(source_path)
+        title, cho_text = convert_text(content, source_path.stem)
+
+        output_path = output_path_for(source_name, source_path, title)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text(cho_text, encoding="utf-8")
+
         print(f"WROTE {output_path.relative_to(REPO_ROOT)}")
         total += 1
 
