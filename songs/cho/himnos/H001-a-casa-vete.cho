@@ -1,11 +1,7 @@
 {title: A CASA VETE}
-{artist: Himnos y Cánticos del Evangelio}
-{book: Himnos y Cánticos del Evangelio}
-{number: H001}
-{song_id: H001}
-{type: Himno}
+{background: /background-media/cafe-himnos.jpg}
 
-{verse: 1}
+[verse 1]
 A casa vete, y cuenta allí
 Que Cristo te libró;
 Que tus amigos vean en ti

@@ -1,11 +1,7 @@
 {title: SEÑOR, TÚ ERES HIJO}
-{artist: Himnos y Cánticos del Evangelio}
-{book: Himnos y Cánticos del Evangelio}
-{number: H282}
-{song_id: H282}
-{type: Himno}
+{background: /background-media/cafe-himnos.jpg}
 
-{verse: 1}
+[verse 1]
 Señor, tú eres Hijo del Padre potente,
 Aun antes del mundo creado existente;
 En ti se reúnen las glorias celestes,

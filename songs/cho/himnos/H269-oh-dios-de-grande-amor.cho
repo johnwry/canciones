@@ -1,11 +1,7 @@
 {title: ¡OH DIOS DE GRANDE AMOR!}
-{artist: Himnos y Cánticos del Evangelio}
-{book: Himnos y Cánticos del Evangelio}
-{number: H269}
-{song_id: H269}
-{type: Himno}
+{background: /background-media/cafe-himnos.jpg}
 
-{verse: 1}
+[verse 1]
 ¡Oh Dios de grande amor!
 Gozamos de tu luz,
 Y disfrutamos tu favor

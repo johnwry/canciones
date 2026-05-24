@@ -1,17 +1,12 @@
 {title: SEÑOR, QUEREMOS}
-{artist: Himnos y Cánticos del Evangelio}
-{book: Himnos y Cánticos del Evangelio}
-{number: H281}
-{song_id: H281}
-{type: Himno}
+{background: /background-media/cafe-himnos.jpg}
 
-{verse: 1}
-ACUDIR
-
+[verse 1]
 Señor, queremos acudir
 Por fe al Calvario, y
 contemplar
 La muerte de Jesús, y así,
+
 Su amor sentir, y descansar;
 En su obra consumada allí
 Tenemos hoy reposo y paz.
@@ -20,13 +15,14 @@ Su espíritu angustiado fue
 Desamparado de su Dios,
 Llevando nuestras culpas, él
 Gustó la muerte y maldición:
+
 Tú le ensalzaste, y puede ver
 El fruto de su redención.
 
 Nos alegramos en pensar
 Que su agonía se acabó;
-La muerte ya no puede
-más,
+La muerte ya no puede más,
 La tumba ya su presa dio;
+
 Está sentado en majestad,
 Y coronado vencedor.

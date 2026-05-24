@@ -1,13 +1,6 @@
 {title: VENID A MI, EL}
-{artist: Himnos y Cánticos del Evangelio}
-{book: Himnos y Cánticos del Evangelio}
-{number: H360}
-{song_id: H360}
-{type: Himno}
 
-{verse: 1}
-SALVADOR DICE
-
+[verse 1]
 "Venid a mí", el Salvador dice
 A los que tienen sed,
 "Venid y de la célica fuente
@@ -15,7 +8,7 @@ De salvación bebed".
 
 Su voz os llama del cielo,
 ¿Queréis a Cristo ir?
-Su salvación, cual libre don,INDICE
+Su salvación, cual libre don,
 
 "Venid a mi, si andáis en
 trabajos,

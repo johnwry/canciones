@@ -1,12 +1,5 @@
 {title: SALVADOR, EN TÍ}
-{artist: Himnos y Cánticos del Evangelio}
-{book: Himnos y Cánticos del Evangelio}
-{number: H278}
-{song_id: H278}
-{type: Himno}
-
-{verse: 1}
-CONFÍO
+{background: /background-media/cafe-himnos.jpg}
 
 Salvador, en ti confío
 Y te adoro en santidad;

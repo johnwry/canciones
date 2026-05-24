@@ -1,17 +1,12 @@
 {title: SEÑOR, NOS}
-{artist: Himnos y Cánticos del Evangelio}
-{book: Himnos y Cánticos del Evangelio}
-{number: H280}
-{song_id: H280}
-{type: Himno}
+{background: /background-media/cafe-himnos.jpg}
 
-{verse: 1}
-RECORDAMOS
-
+[verse 1]
 Señor, nos recordamos
 De tu pasión aquí,
 Cual sustituto santo,
 Sufriendo tu alma así;
+
 El cáliz de amargura,
 Con plena sumisión,
 Tú mismo lo agotaste,
@@ -21,6 +16,7 @@ Las olas vengadoras
 De cólera penal
 Por sobre ti pasaron
 Con peso judicial:
+
 Y tu alma sumergida,
 Probó la maldición
 Debida a los perdidos,
@@ -30,6 +26,7 @@ Sabemos que tu muerte
 Quitó la acusación
 En contra del pecado,
 ¡Qué grande expiación!
+
 Mas ¿cuál no fue el
 tormento
 Que tu alma allá sufrió,
@@ -40,6 +37,7 @@ Y ¿quién dirá qué gozo
 El Padre en ti sintió
 En ese mismo instante
 En que Dios te dejó?
+
 Mas a su diestra ahora
 Sentado en gloria estás,
 Do esperas el momento
